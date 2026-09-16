@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>مساعد الطريق</title>
+<style>
+body{margin:0;background:#111;color:#fff;font-family:Arial,sans-serif;text-align:center}
+header{padding:18px;background:#000} h1{margin:0;font-size:28px}
+main{max-width:900px;margin:auto;padding:14px}
+#camera{width:100%;max-height:65vh;object-fit:cover;background:#222;border-radius:16px;transform:scaleX(-1)}
+.controls{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:14px}
+button{font-size:21px;font-weight:bold;padding:15px 22px;border:0;border-radius:12px;cursor:pointer}
+#start{background:#18a558;color:white} #stop{background:#d33;color:white}
+#speak{background:#f5c400;color:#111}
+#status{font-size:24px;line-height:1.5;padding:15px;background:#222;border-radius:12px}
+.small{color:#bbb;font-size:15px}
+</style>
+</head>
+<body>
+<header><h1>🦯 مساعد الطريق</h1></header>
+<main>
+<video id="camera" autoplay playsinline muted></video>
+<div class="controls">
+<button id="start">تشغيل الكاميرا والمساعد</button>
+<button id="stop" disabled>إيقاف</button>
+<button id="speak">🔊 كرر التعليمات</button>
+</div>
+<div id="status">اضغط تشغيل للبدء</div>
+<p class="small">هذا نموذج أولي تجريبي. لا تعتمد عليه وحده أثناء عبور الشوارع أو السلالم أو الأماكن الخطرة.</p>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+<script>
+const video=document.getElementById('camera');
+const status=document.getElementById('status');
+let stream=null, model=null, timer=null, lastSpeech='', lastTime=0;
+
+const dangerous = new Set([
+  'person','bicycle','car','motorcycle','bus','truck','train',
+  'chair','bench','potted plant','stop sign'
+]);
+
+function say(text, force=false){
+  status.textContent=text;
+  const now=Date.now();
+  if(!('speechSynthesis' in window)) return;
+  if(!force && text===lastSpeech && now-lastTime<2500) return;
+  if(!force && now-lastTime<1600) return;
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(text);
+  u.lang='ar-EG'; u.rate=.95; u.pitch=1;
+  speechSynthesis.speak(u);
+  lastSpeech=text; lastTime=now;
+}
+
+function guide(predictions){
+  const w=video.videoWidth || 640, h=video.videoHeight || 480;
+  let candidates=predictions.filter(p=>dangerous.has(p.class) && p.score>.50);
+  if(!candidates.length){ say('الطريق يبدو خالياً، تحرك للأمام'); return; }
+
+  // Pick the object that appears closest: largest bounding-box area.
+  candidates.sort((a,b)=>(b.bbox[2]*b.bbox[3])-(a.bbox[2]*a.bbox[3]));
+  const p=candidates[0], [x,y,bw,bh]=p.bbox;
+  const cx=x+bw/2;
+  const area=(bw*bh)/(w*h);
+
+  // Larger objects are treated as nearer.
+  if(area>.24){
+    if(cx<w*.40) say('خطر أمامك، تحرك يساراً', true);
+    else if(cx>w*.60) say('خطر أمامك، تحرك يميناً', true);
+    else say('توقف، يوجد عائق أمامك', true);
+  } else if(cx<w*.40) say('يوجد عائق ناحية اليسار، تحرك يميناً');
+  else if(cx>w*.60) say('يوجد عائق ناحية اليمين، تحرك يساراً');
+  else say('يوجد عائق أمامك، تحرك بحذر');
+}
+
+async function loop(){
+  if(!model || video.readyState<2) return;
+  try{
+    const predictions=await model.detect(video);
+    guide(predictions);
+  }catch(e){ console.error(e); }
+}
+
+document.getElementById('start').onclick=async()=>{
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},
+      audio:false
+    });
+    video.srcObject=stream;
+    await video.play();
+    say('جاري تحميل نظام اكتشاف العوائق، انتظر من فضلك', true);
+    model=await cocoSsd.load();
+    say('تم التشغيل. استمع للتوجيهات', true);
+    timer=setInterval(loop,1100);
+    document.getElementById('start').disabled=true;
+    document.getElementById('stop').disabled=false;
+  }catch(e){
+    say('لم أستطع تشغيل الكاميرا. تأكد من السماح للمتصفح باستخدام الكاميرا.', true);
+  }
+};
+
+document.getElementById('stop').onclick=()=>{
+  clearInterval(timer);
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  video.srcObject=null; model=null;
+  document.getElementById('start').disabled=false;
+  document.getElementById('stop').disabled=true;
+  say('تم إيقاف المساعد', true);
+};
+
+document.getElementById('speak').onclick=()=>say(status.textContent || 'اضغط تشغيل للبدء', true);
+</script>
+</body>
+</html>
